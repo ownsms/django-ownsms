@@ -14,6 +14,7 @@ jobs:
   test:
     name: py${{ matrix.python }} · dj${{ matrix.django }}
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,16 +24,22 @@ jobs:
           # Django 4.2 and 5.0 do not support Python 3.13.
           - { python: "3.13", django: "4.2" }
           - { python: "3.13", django: "5.0" }
+        include:
+          # Python 3.14 is newer than these Django releases officially target — run it
+          # forward-looking (allowed to fail) so we see breakage early without blocking CI.
+          - { python: "3.14", django: "5.1", experimental: true }
+          - { python: "3.14", django: "5.2", experimental: true }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
           cache: pip
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install "Django~=${{ matrix.django }}.0" phonenumbers pytest pytest-django
+          pip install "Django~=${{ matrix.django }}.0" phonenumbers pytest pytest-django hypothesis
           pip install -e .
       - name: Test
         run: pytest -q
@@ -119,7 +126,7 @@ jobs:
         run: |
           pip install "Django>=5.2,<6.0" phonenumbers
           pip install -e .
-          pip install pytest pytest-django pytest-cov coverage
+          pip install pytest pytest-django pytest-cov coverage hypothesis
       - name: Run with coverage
         run: |
           python -m pytest \
