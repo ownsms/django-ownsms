@@ -1,0 +1,600 @@
+# Bundled API schema served at /api/v1/openapi.yaml. Keep in sync with docs/api/openapi.yaml.
+openapi: 3.1.0
+info:
+  title: ownsms API
+  version: "0.3.1"
+  description: >
+    Send SMS through your own phone's SIM via API. This is the implemented contract of the
+    `ownsms` Django package (self-host). The cloud (ownsms.uz) and a future FastAPI deployment
+    share the same contract.
+
+    Two credentials: an **API key** (`osk_...`, developer → send/manage) and a **device token**
+    (Android device → poll/report). Both are sent as `Authorization: Bearer <token>`.
+servers:
+  - url: https://sms.omadli.uz/api/v1
+    description: Live demo (self-host reference deployment)
+  - url: https://api.ownsms.uz/api/v1
+    description: Cloud
+  - url: "{base}/api/v1"
+    description: Self-host (django-ownsms / ngrok / localhost)
+    variables:
+      base: { default: "http://localhost:8000" }
+
+security:
+  - apiKey: []
+
+tags:
+  - name: Registration
+  - name: Messages
+  - name: Campaigns
+  - name: Webhooks
+  - name: Audit
+  - name: Device
+  - name: Device protocol
+
+paths:
+  /register:
+    post:
+      tags: [Registration]
+      summary: Register a new account + device (returns device token + API key once)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignupRequest" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Provisioned" } } } }
+
+  /register/pair:
+    post:
+      tags: [Registration]
+      summary: Join an existing account with a pairing code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PairRequest" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Provisioned" } } } }
+        "400": { description: invalid or expired pairing code, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /devices/pairing-code:
+    post:
+      tags: [Registration]
+      summary: Issue a pairing code for the device's account
+      security:
+        - deviceToken: []
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PairingCodeResult" } } } }
+
+  /messages:
+    post:
+      tags: [Messages]
+      summary: Send a single SMS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendMessage" }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "409": { description: device_offline (immediate + device not reachable), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: validation error (invalid phone / invalid_from), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      tags: [Messages]
+      summary: List messages
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/MessageStatus" } }
+        - { name: campaign_id, in: query, schema: { type: string } }
+        - { name: before, in: query, schema: { type: integer, description: cursor from next_before } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MessageList" } } } }
+
+  /messages/{id}:
+    get:
+      tags: [Messages]
+      summary: Get a message
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "404": { description: not found }
+
+  /messages/{id}/cancel:
+    post:
+      tags: [Messages]
+      summary: Cancel a still-queued message
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: canceled, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "409": { description: only queued messages can be canceled, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /campaigns:
+    post:
+      tags: [Campaigns]
+      summary: Create a bulk campaign (rassilka)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCampaign" }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignRef" } } } }
+        "422":
+          description: fail-fast validation — a referenced {var} is missing or a phone is invalid
+          content: { application/json: { schema: { $ref: "#/components/schemas/CampaignValidationError" } } }
+
+  /campaigns/{id}:
+    get:
+      tags: [Campaigns]
+      summary: Campaign status + progress
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+
+  /campaigns/{id}/{action}:
+    post:
+      tags: [Campaigns]
+      summary: pause | resume | cancel
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [pause, resume, cancel] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignRef" } } } }
+
+  /webhook:
+    get:
+      tags: [Webhooks]
+      summary: Get the account webhook config (creates one with a secret if absent)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookConfig" } } } }
+    put:
+      tags: [Webhooks]
+      summary: Update the webhook config (url, events, enabled)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string }
+                events: { type: array, items: { type: string } }
+                enabled: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookConfig" } } } }
+
+  /audit:
+    get:
+      tags: [Audit]
+      summary: Recent audit log entries for the account
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AuditList" } } } }
+
+  /device:
+    get:
+      tags: [Device]
+      summary: Status of the device bound to this API key
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceStatus" } } } }
+
+  /device/register:
+    post:
+      tags: [Device protocol]
+      summary: Device check-in (updates app version + last seen)
+      security:
+        - deviceToken: []
+      responses:
+        "200": { description: OK }
+
+  /device/poll:
+    get:
+      tags: [Device protocol]
+      summary: Long-poll for jobs (server holds ~30s; 204 when none)
+      security:
+        - deviceToken: []
+      responses:
+        "200": { description: jobs, content: { application/json: { schema: { $ref: "#/components/schemas/PollResponse" } } } }
+        "204": { description: nothing queued }
+
+  /device/jobs/{id}/status:
+    post:
+      tags: [Device protocol]
+      summary: Report a job result (sent / delivered / failed)
+      security:
+        - deviceToken: []
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatusReport" }
+      responses:
+        "200": { description: OK }
+
+  /device/heartbeat:
+    post:
+      tags: [Device protocol]
+      summary: Heartbeat (marks the device online)
+      security:
+        - deviceToken: []
+      responses:
+        "200": { description: OK }
+
+  /device/config:
+    get:
+      tags: [Device protocol]
+      summary: Per-SIM pacing config to enforce on the device
+      security:
+        - deviceToken: []
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceConfig" } } } }
+
+  /keys:
+    get:
+      tags: [Keys]
+      summary: List the account's API keys (never returns the secret)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ApiKeyList" } } } }
+    post:
+      tags: [Keys]
+      summary: Create an API key (returns the full secret once)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiKeyCreate" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ApiKeyCreated" } } } }
+
+  /keys/{id}/revoke:
+    post:
+      tags: [Keys]
+      summary: Revoke an API key
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ApiKeyInfo" } } } }
+
+  /devices:
+    get:
+      tags: [Device]
+      summary: List the account's devices
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceList" } } } }
+
+  /devices/{id}/{action}:
+    post:
+      tags: [Device]
+      summary: activate | deactivate a device
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceInfo" } } } }
+
+  /campaigns/{id}/messages:
+    get:
+      tags: [Campaigns]
+      summary: List a campaign's messages (recipients + statuses)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: before, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MessageList" } } } }
+
+  /webhook/deliveries:
+    get:
+      tags: [Webhooks]
+      summary: List webhook delivery attempts
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookDeliveryList" } } } }
+
+components:
+  securitySchemes:
+    apiKey: { type: http, scheme: bearer, description: "Developer API key (osk_...)" }
+    deviceToken: { type: http, scheme: bearer, description: "Device token (issued at registration)" }
+
+  schemas:
+    MessageStatus:
+      type: string
+      enum: [queued, sending, sent, delivered, failed, expired, canceled]
+      description: >
+        Lifecycle: **queued** (accepted) → **sending** (handed to the device) → **sent**
+        (accepted by the carrier — the practical success state) → **delivered** (the operator
+        returned a delivery report; a bonus that may never arrive on some networks).
+        Terminal failures: **failed**, **expired** (TTL passed before send), **canceled**.
+        Treat **sent** as success; do not wait on **delivered**.
+
+    SignupRequest:
+      type: object
+      properties:
+        email: { type: string, nullable: true }
+        device_name: { type: string, nullable: true }
+        app_version: { type: string, nullable: true }
+        sims: { type: array, items: { $ref: "#/components/schemas/SimReg" } }
+
+    PairRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        device_name: { type: string, nullable: true }
+        app_version: { type: string, nullable: true }
+        sims: { type: array, items: { $ref: "#/components/schemas/SimReg" } }
+
+    SimReg:
+      type: object
+      required: [subscription_id]
+      properties:
+        subscription_id: { type: integer }
+        number: { type: string }
+        operator: { type: string }
+        is_default: { type: boolean }
+
+    Provisioned:
+      type: object
+      properties:
+        account_id: { type: integer }
+        device_id: { type: integer }
+        device_token: { type: string }
+        api_key: { type: string, example: osk_ab12... }
+
+    PairingCodeResult:
+      type: object
+      properties:
+        code: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    SendMessage:
+      type: object
+      required: [to, text]
+      properties:
+        to:   { type: string, description: E.164, e.g. +998901234567 }
+        text: { type: string }
+        from: { type: string, nullable: true, description: one of the device's numbers; default SIM if omitted }
+        queued: { type: boolean, default: false, description: false=immediate, true=send when device online }
+        ttl:  { type: integer, nullable: true, description: seconds; default ~24h }
+        send_at: { type: string, format: date-time, nullable: true, description: schedule for later }
+        idempotency_key: { type: string, nullable: true }
+        callback_url: { type: string, nullable: true, description: per-message webhook override }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string, example: msg_7f3a }
+        status: { $ref: "#/components/schemas/MessageStatus" }
+        to: { type: string }
+        text: { type: string }
+        from: { type: string, nullable: true }
+        segments: { type: integer }
+        error_code: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    MessageList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Message" } }
+        next_before: { type: integer, nullable: true, description: "cursor — pass as ?before= for the next page" }
+
+    Recipient:
+      type: object
+      required: [to]
+      properties:
+        to: { type: string }
+        vars: { type: object, additionalProperties: { type: string } }
+
+    CreateCampaign:
+      type: object
+      required: [text, recipients]
+      properties:
+        text: { type: string, description: "template with {var} placeholders" }
+        from: { type: string, nullable: true }
+        recipients: { type: array, items: { $ref: "#/components/schemas/Recipient" }, maxItems: 10000 }
+        rotate_sims: { type: boolean, default: false }
+        send_at: { type: string, format: date-time, nullable: true }
+        queued: { type: boolean, default: true }
+        callback_url: { type: string, nullable: true }
+
+    CampaignRef:
+      type: object
+      properties:
+        id: { type: string, example: camp_7f3a }
+        status: { type: string, enum: [scheduled, running, paused, completed, canceled] }
+        total: { type: integer }
+
+    Campaign:
+      allOf:
+        - $ref: "#/components/schemas/CampaignRef"
+        - type: object
+          properties:
+            progress:
+              type: object
+              properties:
+                queued: { type: integer }
+                sending: { type: integer }
+                sent: { type: integer }
+                delivered: { type: integer }
+                failed: { type: integer }
+                expired: { type: integer }
+                canceled: { type: integer }
+
+    CampaignValidationError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: validation_error }
+            message: { type: string }
+            bad_rows:
+              type: array
+              items:
+                type: object
+                properties:
+                  index: { type: integer }
+                  error: { type: string, example: missing_vars }
+                  missing: { type: array, items: { type: string } }
+
+    WebhookConfig:
+      type: object
+      properties:
+        url: { type: string }
+        events: { type: array, items: { type: string, example: message.delivered } }
+        enabled: { type: boolean }
+        secret: { type: string, description: HMAC-SHA256 key for X-Ownsms-Signature }
+
+    AuditList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              actor: { type: string }
+              action: { type: string, example: account.registered }
+              target: { type: string }
+              ip: { type: string }
+              at: { type: string, format: date-time }
+
+    DeviceStatus:
+      type: object
+      properties:
+        online: { type: boolean, description: derived from last_seen_at }
+        last_seen: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [active, inactive] }
+        sims:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: string }
+              operator: { type: string }
+              is_default: { type: boolean }
+        today_sent: { type: integer }
+
+    DeviceConfig:
+      type: object
+      properties:
+        default_ttl: { type: integer }
+        sims: { type: array, items: { $ref: "#/components/schemas/SimConfig" } }
+
+    SimConfig:
+      type: object
+      properties:
+        subscription_id: { type: integer }
+        rate_per_min: { type: integer }
+        rate_per_hour: { type: integer }
+        rate_per_day: { type: integer }
+        jitter_min: { type: integer }
+        jitter_max: { type: integer }
+        work_hours_start: { type: string, nullable: true }
+        work_hours_end: { type: string, nullable: true }
+        daily_quota: { type: integer, nullable: true }
+
+    PollResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items: { $ref: "#/components/schemas/Job" }
+
+    Job:
+      type: object
+      properties:
+        id: { type: integer }
+        to: { type: string }
+        text: { type: string }
+        subscription_id: { type: integer, nullable: true }
+        segments: { type: integer }
+
+    StatusReport:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [sent, delivered, failed] }
+        error_code: { type: string, nullable: true }
+
+    ApiKeyInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        prefix: { type: string, example: osk_ab12 }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        device_id: { type: integer }
+        ip_allowlist: { type: array, items: { type: string } }
+        is_test: { type: boolean }
+        revoked: { type: boolean }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+
+    ApiKeyList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/ApiKeyInfo" } }
+
+    ApiKeyCreate:
+      type: object
+      properties:
+        name: { type: string }
+        device_id: { type: integer, description: "one of the account's devices; defaults to the caller's device" }
+        scopes: { type: array, items: { type: string }, default: [send, read] }
+        ip_allowlist: { type: array, items: { type: string } }
+        is_test: { type: boolean, default: false }
+
+    ApiKeyCreated:
+      allOf:
+        - $ref: "#/components/schemas/ApiKeyInfo"
+        - type: object
+          properties:
+            api_key: { type: string, description: full secret — shown once }
+
+    DeviceInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        status: { type: string, enum: [active, inactive] }
+        online: { type: boolean }
+        last_seen: { type: string, format: date-time, nullable: true }
+        app_version: { type: string }
+        sims:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: string }
+              operator: { type: string }
+              is_default: { type: boolean }
+              subscription_id: { type: integer }
+
+    DeviceList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/DeviceInfo" } }
+
+    WebhookDeliveryList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              event: { type: string }
+              status: { type: string, enum: [pending, delivered, failed] }
+              attempts: { type: integer }
+              url: { type: string }
+              created_at: { type: string, format: date-time }
+        next_before: { type: integer, nullable: true }
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: device_offline }
+            message: { type: string }

@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ownsms"
+version = "0.3.1"
+description = "Send SMS through your own phone's SIM via API — Django app."
+requires-python = ">=3.11"
+dependencies = ["Django>=4.2,<6.0", "phonenumbers>=8.13"]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "ownsms", email = "dev@ownsms.uz"}]
+keywords = ["sms", "django", "gateway", "otp", "api", "uzbekistan"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: Django",
+  "Framework :: Django :: 4.2",
+  "Framework :: Django :: 5.0",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Telephony",
+]
+
+[project.urls]
+Homepage = "https://ownsms.uz"
+Repository = "https://github.com/ownsms/ownsms"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-django>=4.8",
+  "ruff>=0.6",
+  "tox>=4",
+  "coverage",
+  "pytest-cov",
+  "hypothesis",
+  "mypy",
+  "django-stubs[compatible-mypy]",
+  "bandit",
+  "pip-audit",
+  "pre-commit",
+  "build",
+  "twine",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ownsms = ["openapi.yaml"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "testproject.settings"
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["**/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# tests favour compact style (long lines, one-line setup, throwaway locals)
+per-file-ignores = { "tests/*" = ["E501", "E701", "E702", "F841"] }
+
+[tool.coverage.run]
+source = ["ownsms"]
+omit = ["*/migrations/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+plugins = ["mypy_django_plugin.main"]
+exclude = ["migrations", "tests", "testproject"]
+
+[tool.django-stubs]
+django_settings_module = "testproject.settings"
+
+[tool.bandit]
+# B310: urlopen of a user-configured webhook URL is intentional (we own the URL).
+# B110: bare except/pass in audit log and webhook retry are intentional fire-and-forget guards.
+skips = ["B310", "B110"]

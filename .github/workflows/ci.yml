@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: py${{ matrix.python }} · dj${{ matrix.django }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+        django: ["4.2", "5.0", "5.1", "5.2"]
+        exclude:
+          # Django 4.2 and 5.0 do not support Python 3.13.
+          - { python: "3.13", django: "4.2" }
+          - { python: "3.13", django: "5.0" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install "Django~=${{ matrix.django }}.0" phonenumbers pytest pytest-django
+          pip install -e .
+      - name: Test
+        run: pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install "Django>=5.1,<5.2" phonenumbers
+          pip install -e .
+          pip install mypy "django-stubs[compatible-mypy]"
+      - name: mypy
+        run: python -m mypy src/ownsms
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install bandit pip-audit
+      - name: bandit
+        run: python -m bandit -r src/ownsms -ll -c pyproject.toml
+      - name: pip-audit
+        # Ignore CVEs in pip itself (build/install tool, not a runtime dependency).
+        run: |
+          python -m pip_audit \
+            --ignore-vuln PYSEC-2026-196 \
+            --ignore-vuln CVE-2025-8869 \
+            --ignore-vuln CVE-2026-1703 \
+            --ignore-vuln CVE-2026-3219 \
+            --ignore-vuln CVE-2026-6357 \
+            --skip-editable
+
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install "Django>=5.1,<5.2" phonenumbers
+          pip install -e .
+      - name: Check no missing migrations
+        run: |
+          python -m django makemigrations ownsms \
+            --check --dry-run \
+            --settings=testproject.settings \
+            --skip-checks
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install "Django>=5.2,<6.0" phonenumbers
+          pip install -e .
+          pip install pytest pytest-django pytest-cov coverage
+      - name: Run with coverage
+        run: |
+          python -m pytest \
+            --cov=ownsms \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -q
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build tools
+        run: pip install build twine
+      - name: Build
+        run: python -m build
+      - name: Check dist
+        run: python -m twine check dist/*
+      - name: Smoke-test clean install
+        run: |
+          python -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install --quiet dist/*.whl
+          /tmp/smoke-venv/bin/python - <<'EOF'
+          import os, sys, django
+          os.environ["DJANGO_SETTINGS_MODULE"] = "_settings"
+          import types
+          settings_mod = types.ModuleType("_settings")
+          settings_mod.SECRET_KEY = "smoke"
+          settings_mod.INSTALLED_APPS = [
+              "django.contrib.contenttypes",
+              "django.contrib.auth",
+              "ownsms",
+          ]
+          settings_mod.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+          settings_mod.DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+          sys.modules["_settings"] = settings_mod
+          django.setup()
+          from django.core.management import call_command
+          call_command("migrate", "--run-syncdb", verbosity=0)
+          call_command("check", "--deploy", "--fail-level", "CRITICAL")
+          print("smoke OK")
+          EOF
