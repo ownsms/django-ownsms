@@ -1,6 +1,6 @@
 # ownsms
 
-[![PyPI](https://img.shields.io/pypi/v/ownsms.svg)](https://pypi.org/project/ownsms/)
+[![PyPI](https://img.shields.io/pypi/v/ownsms)](https://pypi.org/project/ownsms/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](https://pypi.org/project/ownsms/)
 [![Django](https://img.shields.io/badge/django-4.2%20%7C%205.0%20%7C%205.1%20%7C%205.2-0C4B33.svg)](https://www.djangoproject.com/)
 [![CI](https://github.com/ownsms/django-ownsms/actions/workflows/ci.yml/badge.svg)](https://github.com/ownsms/django-ownsms/actions/workflows/ci.yml)
