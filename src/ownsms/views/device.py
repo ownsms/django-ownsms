@@ -35,8 +35,11 @@ def poll(request):
     except ApiError as e:
         return error_response(e)
     deadline = time.monotonic() + conf.get("POLL_TIMEOUT_SECONDS")
+    # Mark the device online once per poll, not every second: a poll lasts <= POLL_TIMEOUT
+    # (< DEVICE_ONLINE_SECONDS) and the device immediately re-polls, so last_seen stays fresh
+    # while we drop ~30 redundant writes per poll cycle per device.
+    Device.objects.filter(pk=dev.pk).update(last_seen_at=timezone.now())
     while True:
-        Device.objects.filter(pk=dev.pk).update(last_seen_at=timezone.now())
         jobs = dispatch.claim_jobs(dev, timezone.now())
         if jobs:
             return JsonResponse(
