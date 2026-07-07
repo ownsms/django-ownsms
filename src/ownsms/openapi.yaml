@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: ownsms API
-  version: "0.3.2"
+  version: "0.3.3"
   description: >
     Send SMS through your own phone's SIM via API. This is the implemented contract of the
     `ownsms` Django package (self-host). The cloud (ownsms.uz) and a future FastAPI deployment
