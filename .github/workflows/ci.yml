@@ -14,21 +14,17 @@ jobs:
   test:
     name: py${{ matrix.python }} · dj${{ matrix.django }}
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
         django: ["4.2", "5.0", "5.1", "5.2"]
         exclude:
-          # Django 4.2 and 5.0 do not support Python 3.13.
+          # Django 4.2 and 5.0 support only Python 3.10–3.12.
           - { python: "3.13", django: "4.2" }
           - { python: "3.13", django: "5.0" }
-        include:
-          # Python 3.14 is newer than these Django releases officially target — run it
-          # forward-looking (allowed to fail) so we see breakage early without blocking CI.
-          - { python: "3.14", django: "5.1", experimental: true }
-          - { python: "3.14", django: "5.2", experimental: true }
+          - { python: "3.14", django: "4.2" }
+          - { python: "3.14", django: "5.0" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
