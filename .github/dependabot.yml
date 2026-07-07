@@ -1,8 +1,22 @@
 version: 2
 updates:
+  # Python deps: one grouped PR for minor/patch bumps (major stays separate so it gets a review).
   - package-ecosystem: pip
     directory: "/"
     schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    commit-message: { prefix: "deps" }
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions: batch all bumps into a single PR.
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    commit-message: { prefix: "ci" }
+    groups:
+      github-actions:
+        patterns: ["*"]
