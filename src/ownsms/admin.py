@@ -5,6 +5,10 @@ from django.utils.html import format_html
 
 from . import models
 
+admin.site.site_header = "ownsms boshqaruvi"
+admin.site.site_title = "ownsms admin"
+admin.site.index_title = "Boshqaruv paneli"
+
 _STATUS_COLORS = {
     "queued": "#F5A623",
     "dispatched": "#2952E3",
@@ -61,8 +65,10 @@ class DeviceAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("name", "account__email")
     date_hierarchy = "created_at"
+    ordering = ("-id",)
     readonly_fields = ("device_token", "last_seen_at", "created_at")
     list_select_related = ("account",)
+    autocomplete_fields = ("account",)
     inlines = [SimInline]
     actions = ["activate", "deactivate"]
 
@@ -86,7 +92,17 @@ class SimAdmin(admin.ModelAdmin):
     list_display = ("id", "device", "number", "operator", "is_default", "rate_per_min", "rate_per_day", "daily_quota")
     list_filter = ("is_default", "operator")
     search_fields = ("number", "operator")
+    ordering = ("device", "subscription_id")
     list_select_related = ("device",)
+    autocomplete_fields = ("device",)
+    fieldsets = (
+        (None, {"fields": ("device", "subscription_id", "number", "operator", "is_default")}),
+        (
+            "Tezlik cheklovlari",
+            {"fields": ("rate_per_min", "rate_per_hour", "rate_per_day", "jitter_min", "jitter_max", "daily_quota")},
+        ),
+        ("Ish soatlari", {"fields": ("work_hours_start", "work_hours_end"), "classes": ("collapse",)}),
+    )
 
 
 @admin.register(models.ApiKey)
@@ -94,8 +110,10 @@ class ApiKeyAdmin(admin.ModelAdmin):
     list_display = ("id", "account", "device", "prefix", "scopes", "is_test", "revoked", "last_used_at", "created_at")
     list_filter = ("revoked", "is_test")
     search_fields = ("prefix", "account__email")
+    ordering = ("-id",)
     readonly_fields = ("key_hash", "prefix", "created_at", "last_used_at")
     list_select_related = ("account", "device")
+    autocomplete_fields = ("account", "device")
     actions = ["revoke"]
 
     @admin.action(description="Bekor qilish (revoke)")
@@ -110,9 +128,23 @@ class MessageAdmin(admin.ModelAdmin):
     list_filter = ("status", "is_test", "queued")
     search_fields = ("to", "text", "idempotency_key")
     date_hierarchy = "created_at"
+    ordering = ("-id",)
     readonly_fields = ("created_at", "dispatched_at", "sent_at", "delivered_at", "lease_expires_at")
     list_select_related = ("account", "sim")
+    autocomplete_fields = ("account", "device", "sim", "campaign")
     actions = ["cancel_queued"]
+    fieldsets = (
+        (None, {"fields": ("account", "device", "sim", "to", "text", "status")}),
+        ("Yuborish", {"fields": ("queued", "scheduled_at", "ttl", "segments", "is_test", "campaign")}),
+        ("Texnik", {"fields": ("idempotency_key", "error_code", "callback_url"), "classes": ("collapse",)}),
+        (
+            "Vaqtlar",
+            {
+                "fields": ("created_at", "dispatched_at", "sent_at", "delivered_at", "lease_expires_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
@@ -130,8 +162,10 @@ class CampaignAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("account__email",)
     date_hierarchy = "created_at"
+    ordering = ("-id",)
     readonly_fields = ("created_at",)
     list_select_related = ("account",)
+    autocomplete_fields = ("account", "device", "sim")
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
@@ -148,6 +182,7 @@ class WebhookAdmin(admin.ModelAdmin):
     list_filter = ("enabled",)
     search_fields = ("account__email", "url")
     readonly_fields = ("secret", "created_at")  # secret is sensitive — never editable here
+    autocomplete_fields = ("account",)
 
 
 @admin.register(models.WebhookDelivery)
@@ -156,8 +191,10 @@ class WebhookDeliveryAdmin(admin.ModelAdmin):
     list_filter = ("status", "event")
     search_fields = ("event_id", "event")
     date_hierarchy = "created_at"
+    ordering = ("-id",)
     readonly_fields = ("payload", "created_at")
     list_select_related = ("account",)
+    autocomplete_fields = ("account", "message")
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
@@ -169,7 +206,9 @@ class PairingCodeAdmin(admin.ModelAdmin):
     list_display = ("code", "account", "used", "expires_at", "created_at")
     list_filter = ("used",)
     search_fields = ("code", "account__email")
+    ordering = ("-id",)
     readonly_fields = ("created_at",)
+    autocomplete_fields = ("account",)
 
 
 @admin.register(models.AuditLog)
