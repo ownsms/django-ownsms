@@ -34,13 +34,17 @@ def report_status(device, message_id, status, error_code=""):
     allowed = {"sent": {"dispatched"}, "delivered": {"sent"}, "failed": {"dispatched", "sent"}}
     if status not in allowed:
         raise ApiError("bad_status", f"Unknown status {status}", 400)
-    if m.status not in allowed[status]:
+    # A lease_timeout is a *guess* that the device died mid-send. If the device later reports the
+    # real outcome (it was actually sent — common on OEM phones that kill the app), believe it and
+    # recover the job. A genuine failure (any other error_code) stays failed.
+    recovering = m.status == "failed" and m.error_code == "lease_timeout"
+    if m.status not in allowed[status] and not recovering:
         return m  # stale/invalid transition ignored
     now = timezone.now()
     if status == "sent":
-        m.status, m.sent_at = "sent", now
+        m.status, m.sent_at, m.error_code = "sent", now, ""  # clear a recovered lease_timeout
     elif status == "delivered":
-        m.status, m.delivered_at = "delivered", now
+        m.status, m.delivered_at, m.error_code = "delivered", now, ""
     else:
         m.status, m.error_code = "failed", error_code or "send_failed"
     m.save(update_fields=["status", "sent_at", "delivered_at", "error_code"])
