@@ -72,6 +72,15 @@ def test_lease_timeout_recovers_on_late_sent(dev):
 
 
 @pytest.mark.django_db
+def test_lease_timeout_recovers_direct_to_delivered_sets_sent_at(dev):
+    """Recovering lease_timeout straight to delivered must set sent_at too, else today_sent undercounts."""
+    m = _msg(dev, status="failed", error_code="lease_timeout")
+    report_status(dev, m.id, "delivered")
+    m.refresh_from_db()
+    assert m.status == "delivered" and m.delivered_at and m.sent_at and m.error_code == ""
+
+
+@pytest.mark.django_db
 def test_genuine_failure_not_recoverable(dev):
     """Only lease_timeout is a guess; a real send_failed must stay failed."""
     m = _msg(dev, status="failed", error_code="send_failed")

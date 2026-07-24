@@ -46,7 +46,7 @@ def register(*, email="", device_name="", app_version="", sims=None):
 
 @transaction.atomic
 def create_pairing_code(account, ttl_seconds=600):
-    code = secrets.token_hex(4)  # 8 hex chars
+    code = secrets.token_hex(16)  # 32 hex chars (fits max_length=32)
     pc = PairingCode.objects.create(
         account=account, code=code, expires_at=timezone.now() + timedelta(seconds=ttl_seconds), used=False
     )

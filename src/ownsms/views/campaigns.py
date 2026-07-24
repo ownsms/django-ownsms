@@ -1,6 +1,7 @@
 import json
 
 from django.http import JsonResponse
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -18,7 +19,11 @@ def create(request):
     try:
         key = resolve_api_key(request, scope="send")
         b = json.loads(request.body or "{}")
-        send_at = parse_datetime(b["send_at"]) if b.get("send_at") else None
+        send_at = None
+        if b.get("send_at"):
+            send_at = parse_datetime(b["send_at"])
+            if send_at is None or timezone.is_naive(send_at):
+                raise ApiError("invalid_send_at", "send_at must be an ISO-8601 datetime with timezone", 422)
         c = campaigns.create_campaign(
             key,
             text=b.get("text", ""),
@@ -71,7 +76,7 @@ def messages(request, cid):
         c = Campaign.objects.filter(account=key.account, pk=_camp_pk(cid)).first()
         if not c:
             return error_response(ApiError("not_found", "Campaign not found", 404))
-        qs = c.messages.order_by("id")
+        qs = c.messages.select_related("sim").order_by("id")
         before = request.GET.get("before")
         if before and before.isdigit():
             qs = qs.filter(id__gt=int(before))
@@ -97,7 +102,7 @@ def action(request, cid, act):
         if not c:
             return error_response(ApiError("not_found", "Campaign not found", 404))
         campaigns.control(c, act)
-        return JsonResponse({"id": f"camp_{c.id}", "status": c.status})
+        return JsonResponse({"id": f"camp_{c.id}", "status": c.status, "total": c.total})
     except ApiError as e:
         return error_response(e)
     except ValueError:

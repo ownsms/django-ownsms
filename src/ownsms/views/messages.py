@@ -1,6 +1,7 @@
 import json
 
 from django.http import JsonResponse
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -43,6 +44,15 @@ def _msg_pk(raw: str):
     return int(raw[4:]) if raw.startswith("msg_") else int(raw)
 
 
+def _parse_send_at(raw):
+    if not raw:
+        return None
+    dt = parse_datetime(raw)
+    if dt is None:
+        raise ApiError("bad_request", "Invalid send_at datetime", 400)
+    return dt if dt.tzinfo else timezone.make_aware(dt)
+
+
 @csrf_exempt
 @require_http_methods(["POST", "GET"])
 def messages(request):
@@ -59,11 +69,11 @@ def messages(request):
                 ttl=body.get("ttl"),
                 idempotency_key=body.get("idempotency_key", ""),
                 callback_url=body.get("callback_url", ""),
-                send_at=parse_datetime(body["send_at"]) if body.get("send_at") else None,
+                send_at=_parse_send_at(body.get("send_at")),
             )
             return JsonResponse(_serialize(msg), status=202)
         key = resolve_api_key(request, scope="read")
-        qs = Message.objects.filter(account=key.account).order_by("-id")
+        qs = Message.objects.filter(account=key.account).select_related("sim").order_by("-id")
         status = request.GET.get("status")
         if status:
             qs = qs.filter(status=_to_internal_status(status))
@@ -113,13 +123,14 @@ def message_cancel(request, mid):
             pk = _msg_pk(mid)
         except ValueError:
             return error_response(ApiError("not_found", "Message not found", 404))
-        m = Message.objects.filter(account=key.account, pk=pk).first()
-        if not m:
-            return error_response(ApiError("not_found", "Message not found", 404))
-        if m.status != "queued":
+        # Status-guarded atomic update: races claim_jobs so we never report 'canceled'
+        # for a message the device has already picked up.
+        rows = Message.objects.filter(pk=pk, account=key.account, status="queued").update(status="canceled")
+        if rows == 0:
+            m = Message.objects.filter(account=key.account, pk=pk).first()
+            if not m:
+                return error_response(ApiError("not_found", "Message not found", 404))
             return error_response(ApiError("cannot_cancel", "Only queued messages can be canceled", 409))
-        m.status = "canceled"
-        m.save(update_fields=["status"])
-        return JsonResponse(_serialize(m))
+        return JsonResponse(_serialize(Message.objects.get(account=key.account, pk=pk)))
     except ApiError as e:
         return error_response(e)

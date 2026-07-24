@@ -4,9 +4,10 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from ..auth import resolve_api_key
+from ..auth import _client_ip, resolve_api_key
 from ..errors import ApiError, error_response
 from ..models import ApiKey, Device
+from ..services import audit
 from ..tokens import new_api_key
 
 
@@ -47,6 +48,7 @@ def keys(request):
                 ip_allowlist=b.get("ip_allowlist") or [],
                 is_test=bool(b.get("is_test", False)),
             )
+            audit.log(key.account, "key", "apikey.created", f"key:{k.id}", _client_ip(request))
             return JsonResponse({**_serialize(k), "api_key": full}, status=201)
         return JsonResponse({"data": [_serialize(k) for k in key.account.api_keys.order_by("-id")]})
     except ApiError as e:
@@ -69,6 +71,7 @@ def key_revoke(request, kid):
             return error_response(ApiError("not_found", "Key not found", 404))
         k.revoked = True
         k.save(update_fields=["revoked"])
+        audit.log(key.account, "key", "apikey.revoked", f"key:{k.id}", _client_ip(request))
         return JsonResponse(_serialize(k))
     except ApiError as e:
         return error_response(e)

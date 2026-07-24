@@ -3,9 +3,10 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from ..auth import resolve_api_key
+from ..auth import _client_ip, resolve_api_key
 from ..errors import ApiError, error_response
 from ..models import Device
+from ..services import audit
 
 
 def _serialize(d, now):
@@ -58,6 +59,7 @@ def device_action(request, did, act):
         else:
             return error_response(ApiError("bad_action", f"Unknown action {act}", 400))
         d.save(update_fields=["status"])
+        audit.log(key.account, "key", f"device.{act}d", f"device:{d.id}", _client_ip(request))
         return JsonResponse(_serialize(d, timezone.now()))
     except ApiError as e:
         return error_response(e)

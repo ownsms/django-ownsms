@@ -4,10 +4,10 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from ..auth import resolve_api_key
+from ..auth import _client_ip, resolve_api_key
 from ..errors import ApiError, error_response
 from ..models import WebhookDelivery
-from ..services import webhooks
+from ..services import audit, webhooks
 
 
 def _serialize(wh):
@@ -29,6 +29,7 @@ def webhook(request):
             if "enabled" in b:
                 wh.enabled = bool(b["enabled"])
             wh.save(update_fields=["url", "events", "enabled"])
+            audit.log(key.account, "key", "webhook.updated", "", _client_ip(request))
         return JsonResponse(_serialize(wh))
     except ApiError as e:
         return error_response(e)

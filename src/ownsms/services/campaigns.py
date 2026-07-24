@@ -18,6 +18,8 @@ def create_campaign(
     key, *, text, recipients, from_=None, send_at=None, queued=True, rotate_sims=False, callback_url=""
 ):
     device = key.device
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError("invalid_text", "text is required", 422)
     if not recipients:
         raise ApiError("no_recipients", "recipients is empty", 422)
     sim, _ = messaging._resolve_sim(device, from_)
@@ -54,12 +56,14 @@ def create_campaign(
         total=len(rendered),
     )
     ttl = conf.get("DEFAULT_TTL_SECONDS")
+    # rotate_sims: round-robin each message across the device's SIMs; otherwise all share the resolved SIM.
+    sims = list(device.sims.all()) if rotate_sims else None
     Message.objects.bulk_create(
         [
             Message(
                 account=key.account,
                 device=device,
-                sim=sim,
+                sim=sims[i % len(sims)] if sims else sim,
                 to=to,
                 text=body,
                 status="queued",
@@ -69,7 +73,7 @@ def create_campaign(
                 campaign=campaign,
                 scheduled_at=send_at,
             )
-            for (to, body) in rendered
+            for i, (to, body) in enumerate(rendered)
         ]
     )
     return campaign
