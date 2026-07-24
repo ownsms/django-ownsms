@@ -22,6 +22,8 @@ def _resolve_sim(device, from_):
 def create_message(
     key, *, to, text, from_=None, queued=False, ttl=None, idempotency_key="", callback_url="", send_at=None
 ):
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError("invalid_text", "text is required", 422)
     device = key.device
     if idempotency_key:
         existing = Message.objects.filter(account=key.account, idempotency_key=idempotency_key).first()

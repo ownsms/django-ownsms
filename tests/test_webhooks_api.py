@@ -50,9 +50,7 @@ def test_send_pending_delivers_on_2xx(ctx):
     Webhook.objects.create(account=acc, secret="s", url="https://x.test", events=["message.sent"], enabled=True)
     m = Message.objects.create(account=acc, device=dev, sim=sim, to="+998900000000", text="hi", status="dispatched")
     dispatch.report_status(dev, m.id, "sent")
-    with mock.patch("ownsms.services.webhooks.urllib.request.urlopen") as u:
-        u.return_value.__enter__ = lambda s: s
-        u.return_value.__exit__ = lambda *a: False
+    with mock.patch("ownsms.services.webhooks._check_url"), mock.patch("ownsms.services.webhooks._opener.open"):
         assert webhooks.send_pending() == 1
     assert WebhookDelivery.objects.get().status == "delivered"
 
@@ -63,7 +61,43 @@ def test_send_pending_retries_on_failure(ctx):
     Webhook.objects.create(account=acc, secret="s", url="https://x.test", events=["message.sent"], enabled=True)
     m = Message.objects.create(account=acc, device=dev, sim=sim, to="+998900000000", text="hi", status="dispatched")
     dispatch.report_status(dev, m.id, "sent")
-    with mock.patch("ownsms.services.webhooks.urllib.request.urlopen", side_effect=Exception("boom")):
+    with (
+        mock.patch("ownsms.services.webhooks._check_url"),
+        mock.patch("ownsms.services.webhooks._opener.open", side_effect=Exception("boom")),
+    ):
         webhooks.send_pending()
     d = WebhookDelivery.objects.get()
     assert d.status == "pending" and d.attempts == 1 and d.next_retry_at is not None
+
+
+@pytest.mark.django_db
+def test_send_pending_blocks_ssrf_targets(ctx):
+    """file:// scheme and a private-IP host are rejected before any network call."""
+    acc, dev, sim, h = ctx
+    Webhook.objects.create(account=acc, secret="s", url="https://x.test", events=["message.sent"], enabled=True)
+    for bad_url in ("file:///etc/passwd", "http://127.0.0.1:8080/hook", "http://169.254.169.254/latest"):
+        m = Message.objects.create(account=acc, device=dev, sim=sim, to="+998900000000", text="hi", status="dispatched")
+        d = WebhookDelivery.objects.create(
+            account=acc,
+            event_id=f"e{m.id}",
+            event="message.sent",
+            message=m,
+            url=bad_url,
+            payload={"x": 1},
+            next_retry_at=timezone.now(),
+            status="pending",
+        )
+        # _opener.open must never be reached for a blocked target.
+        with mock.patch("ownsms.services.webhooks._opener.open", side_effect=AssertionError("egress attempted")):
+            assert webhooks.send_pending() == 0
+        d.refresh_from_db()
+        assert d.status == "pending" and d.attempts == 1  # failed the guard, will retry
+
+
+def test_check_url_rejects_scheme_and_private_ip():
+    with pytest.raises(ValueError):
+        webhooks._check_url("file:///etc/passwd")
+    with pytest.raises(ValueError):
+        webhooks._check_url("ftp://example.test/x")
+    with pytest.raises(ValueError):
+        webhooks._check_url("http://127.0.0.1/hook")  # loopback

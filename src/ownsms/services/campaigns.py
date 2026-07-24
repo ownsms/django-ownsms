@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count
 from django.utils import timezone
 
@@ -15,11 +15,28 @@ class CampaignValidation(Exception):
 
 @transaction.atomic
 def create_campaign(
-    key, *, text, recipients, from_=None, send_at=None, queued=True, rotate_sims=False, callback_url=""
+    key,
+    *,
+    text,
+    recipients,
+    from_=None,
+    send_at=None,
+    queued=True,
+    rotate_sims=False,
+    callback_url="",
+    idempotency_key="",
 ):
     device = key.device
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError("invalid_text", "text is required", 422)
     if not recipients:
         raise ApiError("no_recipients", "recipients is empty", 422)
+    # Idempotent retry: a re-POSTed campaign returns the original instead of double-sending.
+    # ponytail: unlike single-send, we don't 409 on key-reused-with-different-payload — spec is lenient here.
+    if idempotency_key:
+        existing = Campaign.objects.filter(account=key.account, idempotency_key=idempotency_key).first()
+        if existing:
+            return existing
     sim, _ = messaging._resolve_sim(device, from_)
     bad, rendered = [], []
     for i, r in enumerate(recipients):
@@ -40,38 +57,49 @@ def create_campaign(
     if bad:
         raise CampaignValidation(bad)
 
-    campaign = Campaign.objects.create(
-        account=key.account,
-        device=device,
-        sim=sim,
-        text=text,
-        from_number=from_ or "",
-        rotate_sims=rotate_sims,
-        send_at=send_at,
-        queued=queued,
-        callback_url=callback_url or "",
-        status="scheduled" if send_at else "running",
-        total=len(rendered),
-    )
     ttl = conf.get("DEFAULT_TTL_SECONDS")
-    Message.objects.bulk_create(
-        [
-            Message(
+    # rotate_sims: round-robin each message across the device's SIMs; otherwise all share the resolved SIM.
+    sims = list(device.sims.all()) if rotate_sims else None
+    try:
+        # Savepoint so a losing IntegrityError race rolls back cleanly and we can re-query below.
+        with transaction.atomic():
+            campaign = Campaign.objects.create(
                 account=key.account,
                 device=device,
                 sim=sim,
-                to=to,
-                text=body,
-                status="queued",
+                text=text,
+                from_number=from_ or "",
+                rotate_sims=rotate_sims,
+                send_at=send_at,
                 queued=queued,
-                ttl=ttl,
-                segments=segments.count_segments(body),
-                campaign=campaign,
-                scheduled_at=send_at,
+                callback_url=callback_url or "",
+                status="scheduled" if send_at else "running",
+                total=len(rendered),
+                idempotency_key=idempotency_key or None,  # constraint is isnull-based: never store ""
             )
-            for (to, body) in rendered
-        ]
-    )
+            Message.objects.bulk_create(
+                [
+                    Message(
+                        account=key.account,
+                        device=device,
+                        sim=sims[i % len(sims)] if sims else sim,
+                        to=to,
+                        text=body,
+                        status="queued",
+                        queued=queued,
+                        ttl=ttl,
+                        segments=segments.count_segments(body),
+                        campaign=campaign,
+                        scheduled_at=send_at,
+                    )
+                    for i, (to, body) in enumerate(rendered)
+                ]
+            )
+    except IntegrityError:
+        existing = Campaign.objects.filter(account=key.account, idempotency_key=idempotency_key).first()
+        if existing:
+            return existing
+        raise
     return campaign
 
 

@@ -1,6 +1,7 @@
 import json
 
 from django.http import JsonResponse
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -18,7 +19,11 @@ def create(request):
     try:
         key = resolve_api_key(request, scope="send")
         b = json.loads(request.body or "{}")
-        send_at = parse_datetime(b["send_at"]) if b.get("send_at") else None
+        send_at = None
+        if b.get("send_at"):
+            send_at = parse_datetime(b["send_at"])
+            if send_at is None or timezone.is_naive(send_at):
+                raise ApiError("invalid_send_at", "send_at must be an ISO-8601 datetime with timezone", 422)
         c = campaigns.create_campaign(
             key,
             text=b.get("text", ""),
@@ -28,6 +33,7 @@ def create(request):
             queued=bool(b.get("queued", True)),
             rotate_sims=bool(b.get("rotate_sims", False)),
             callback_url=b.get("callback_url", ""),
+            idempotency_key=b.get("idempotency_key", ""),
         )
         return JsonResponse({"id": f"camp_{c.id}", "status": c.status, "total": c.total}, status=202)
     except campaigns.CampaignValidation as e:
@@ -71,17 +77,19 @@ def messages(request, cid):
         c = Campaign.objects.filter(account=key.account, pk=_camp_pk(cid)).first()
         if not c:
             return error_response(ApiError("not_found", "Campaign not found", 404))
-        qs = c.messages.order_by("id")
+        # Match the shared MessageList contract + the sibling /messages endpoint: newest-first,
+        # `before` is an exclusive upper-bound id, cursor field is `next_before`.
+        qs = c.messages.select_related("sim").order_by("-id")
         before = request.GET.get("before")
         if before and before.isdigit():
-            qs = qs.filter(id__gt=int(before))
+            qs = qs.filter(id__lt=int(before))
         try:
             limit = min(max(int(request.GET.get("limit", 50)), 1), 200)
         except ValueError:
             limit = 50
         items = list(qs[:limit])
-        next_after = items[-1].id if len(items) == limit else None
-        return JsonResponse({"data": [_serialize_message(m) for m in items], "next_after": next_after})
+        next_before = items[-1].id if len(items) == limit else None
+        return JsonResponse({"data": [_serialize_message(m) for m in items], "next_before": next_before})
     except ApiError as e:
         return error_response(e)
     except ValueError:
@@ -97,7 +105,7 @@ def action(request, cid, act):
         if not c:
             return error_response(ApiError("not_found", "Campaign not found", 404))
         campaigns.control(c, act)
-        return JsonResponse({"id": f"camp_{c.id}", "status": c.status})
+        return JsonResponse({"id": f"camp_{c.id}", "status": c.status, "total": c.total})
     except ApiError as e:
         return error_response(e)
     except ValueError:
