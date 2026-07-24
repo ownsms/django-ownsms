@@ -15,10 +15,10 @@ def bearer_from_request(request) -> str:
 
 
 def _client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "")
+    # nginx is the single edge proxy and sets X-Real-IP to the real peer ($remote_addr),
+    # overwriting any client-sent value — so it is authoritative and spoofing-proof here.
+    # Never trust X-Forwarded-For (client-controllable on the left).
+    return request.META.get("HTTP_X_REAL_IP") or request.META.get("REMOTE_ADDR", "")
 
 
 def _ip_allowed(ip, allow):

@@ -32,6 +32,22 @@ def test_ip_allowlist_blocks_and_allows():
 
 
 @pytest.mark.django_db
+def test_spoofed_xff_does_not_satisfy_allowlist():
+    # nginx sets X-Real-IP to the real peer and X-Forwarded-For is client-controllable.
+    acc, dev, full = _key(ip_allowlist=["10.0.0.0/8"])
+    rf = RequestFactory()
+    spoofed = rf.get(
+        "/", HTTP_AUTHORIZATION=f"Bearer {full}", REMOTE_ADDR="8.8.8.8", HTTP_X_FORWARDED_FOR="10.1.2.3, 8.8.8.8"
+    )
+    with pytest.raises(ApiError) as e:
+        resolve_api_key(spoofed, scope="read")
+    assert e.value.status == 403
+    # nginx-set X-Real-IP is authoritative: an allowed peer passes even with a hostile REMOTE_ADDR fallback.
+    ok = rf.get("/", HTTP_AUTHORIZATION=f"Bearer {full}", REMOTE_ADDR="8.8.8.8", HTTP_X_REAL_IP="10.1.2.3")
+    assert resolve_api_key(ok, scope="read") is not None
+
+
+@pytest.mark.django_db
 def test_register_writes_audit_and_endpoint_reads_it():
     c = Client()
     r = c.post("/api/v1/register", data="{}", content_type="application/json")

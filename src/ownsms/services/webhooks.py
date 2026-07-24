@@ -81,7 +81,14 @@ def _check_url(url):
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
         ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
             raise ValueError(f"blocked destination IP: {ip}")
 
 

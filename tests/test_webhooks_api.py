@@ -61,8 +61,9 @@ def test_send_pending_retries_on_failure(ctx):
     Webhook.objects.create(account=acc, secret="s", url="https://x.test", events=["message.sent"], enabled=True)
     m = Message.objects.create(account=acc, device=dev, sim=sim, to="+998900000000", text="hi", status="dispatched")
     dispatch.report_status(dev, m.id, "sent")
-    with mock.patch("ownsms.services.webhooks._check_url"), mock.patch(
-        "ownsms.services.webhooks._opener.open", side_effect=Exception("boom")
+    with (
+        mock.patch("ownsms.services.webhooks._check_url"),
+        mock.patch("ownsms.services.webhooks._opener.open", side_effect=Exception("boom")),
     ):
         webhooks.send_pending()
     d = WebhookDelivery.objects.get()
@@ -77,8 +78,14 @@ def test_send_pending_blocks_ssrf_targets(ctx):
     for bad_url in ("file:///etc/passwd", "http://127.0.0.1:8080/hook", "http://169.254.169.254/latest"):
         m = Message.objects.create(account=acc, device=dev, sim=sim, to="+998900000000", text="hi", status="dispatched")
         d = WebhookDelivery.objects.create(
-            account=acc, event_id=f"e{m.id}", event="message.sent", message=m, url=bad_url,
-            payload={"x": 1}, next_retry_at=timezone.now(), status="pending",
+            account=acc,
+            event_id=f"e{m.id}",
+            event="message.sent",
+            message=m,
+            url=bad_url,
+            payload={"x": 1},
+            next_retry_at=timezone.now(),
+            status="pending",
         )
         # _opener.open must never be reached for a blocked target.
         with mock.patch("ownsms.services.webhooks._opener.open", side_effect=AssertionError("egress attempted")):

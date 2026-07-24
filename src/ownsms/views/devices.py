@@ -44,7 +44,7 @@ def devices(request):
 @require_http_methods(["POST"])
 def device_action(request, did, act):
     try:
-        key = resolve_api_key(request)
+        key = resolve_api_key(request, scope="send")
         try:
             pk = int(did)
         except ValueError:

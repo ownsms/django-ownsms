@@ -18,7 +18,8 @@ def _serialize(wh):
 @require_http_methods(["GET", "PUT"])
 def webhook(request):
     try:
-        key = resolve_api_key(request)  # any valid key for the account
+        # GET (read config) allows any valid key; PUT (repoint webhook) requires 'send'.
+        key = resolve_api_key(request, scope="send" if request.method == "PUT" else None)
         wh = webhooks.get_or_create_config(key.account)
         if request.method == "PUT":
             b = json.loads(request.body or "{}")

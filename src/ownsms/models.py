@@ -64,6 +64,11 @@ class Sim(models.Model):
         label = self.number or f"SIM {self.subscription_id}"
         return f"{label} — {self.operator}" if self.operator else label
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default:
+            Sim.objects.filter(device=self.device).exclude(pk=self.pk).update(is_default=False)
+
 
 class ApiKey(models.Model):
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="api_keys", verbose_name="Akkaunt")
@@ -102,11 +107,19 @@ class Campaign(models.Model):
     # scheduled|running|paused|completed|canceled
     status = models.CharField("Holat", max_length=20, default="running")
     total = models.IntegerField("Jami", default=0)
+    idempotency_key = models.CharField("Idempotency kaliti", max_length=64, null=True, blank=True)
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
 
     class Meta:
         verbose_name = "Rassilka"
         verbose_name_plural = "Rassilkalar"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["account", "idempotency_key"],
+                condition=models.Q(idempotency_key__isnull=False),
+                name="uniq_campaign_idempotency",
+            )
+        ]
 
     def __str__(self):
         return f"Rassilka #{self.pk} ({self.total} ta)"
@@ -142,6 +155,10 @@ class Message(models.Model):
     class Meta:
         verbose_name = "Xabar"
         verbose_name_plural = "Xabarlar"
+        indexes = [
+            models.Index(fields=["device", "status"], name="msg_device_status"),
+            models.Index(fields=["status", "lease_expires_at"], name="msg_status_lease"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["account", "idempotency_key"],
@@ -203,6 +220,9 @@ class WebhookDelivery(models.Model):
     class Meta:
         verbose_name = "Webhook yetkazish"
         verbose_name_plural = "Webhook yetkazishlar"
+        indexes = [
+            models.Index(fields=["status", "next_retry_at"], name="whd_status_retry"),
+        ]
 
     def __str__(self):
         return f"{self.event} → {self.status}"
